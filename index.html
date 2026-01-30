@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PCgram - Messagerie</title>
+    <style>
+        :root { --tg-blue: #0088cc; --tg-bg: #e7ebf0; --sent: #effdde; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: var(--tg-bg); height: 100vh; overflow: hidden; }
+
+        /* Navigation */
+        #view-list, #view-chat { position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; transition: 0.2s; }
+        .hidden { display: none !important; }
+
+        /* Header */
+        .header { background: var(--tg-blue); color: white; padding: 10px 15px; display: flex; align-items: center; justify-content: space-between; height: 60px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 10; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #fff; border: 1px solid #ddd; }
+        
+        /* Liste Contacts */
+        .contact-list { flex: 1; overflow-y: auto; background: white; }
+        .contact-item { padding: 12px 15px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 12px; }
+        .contact-info { flex: 1; font-weight: 500; }
+
+        /* Chat */
+        #messages { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; background: #e7ebf0; }
+        .msg { max-width: 85%; padding: 8px 12px; border-radius: 15px; font-size: 15px; box-shadow: 0 1px 1px rgba(0,0,0,0.1); word-wrap: break-word; }
+        .msg img, .msg video { max-width: 100%; border-radius: 10px; display: block; margin-top: 5px; }
+        .sent { align-self: flex-end; background: var(--sent); border-bottom-right-radius: 4px; }
+        .received { align-self: flex-start; background: white; border-bottom-left-radius: 4px; }
+
+        /* Barre d'envoi */
+        .input-area { background: white; border-top: 1px solid #ddd; padding: 8px; }
+        .input-row { display: flex; align-items: center; gap: 8px; }
+        input[type="text"] { flex: 1; padding: 10px 15px; border-radius: 20px; border: 1px solid #ddd; outline: none; font-size: 16px; }
+        
+        .media-btns { display: flex; justify-content: space-around; padding-top: 8px; border-top: 1px solid #f5f5f5; margin-top: 8px; }
+        .btn { background: none; border: none; color: var(--tg-blue); font-weight: bold; cursor: pointer; font-size: 16px; }
+        .icon-label { font-size: 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="view-list">
+        <div class="header">
+            <label for="profile-upload">
+                <img id="my-avatar" class="avatar" src="https://cdn-icons-png.flaticon.com/512/149/149071.png">
+            </label>
+            <input type="file" id="profile-upload" class="hidden" accept="image/*" onchange="updateProfilePic(this)">
+            <span>PCgram</span>
+            <button class="btn" style="color:white; font-size:22px;" onclick="addNewContact()">+</button>
+        </div>
+        <div id="contact-list" class="contact-list"></div>
+    </div>
+
+    <div id="view-chat" class="hidden">
+        <div class="header">
+            <button onclick="backToList()" style="color:white; background:none; border:none; font-size:20px;">←</button>
+            <div style="flex:1; margin-left:10px; display:flex; align-items:center; gap:10px;">
+                <img id="chat-avatar" class="avatar" src="">
+                <span id="chat-title">Chat</span>
+            </div>
+        </div>
+        <div id="messages"></div>
+        <div class="input-area">
+            <div class="input-row">
+                <input type="text" id="msgInput" placeholder="Message...">
+                <button class="btn" onclick="sendMessage()">ENVOYER</button>
+            </div>
+            <div class="media-btns">
+                <label for="media-upload" class="icon-label">🖼️</label>
+                <input type="file" id="media-upload" class="hidden" accept="image/*,video/*" onchange="sendMedia(this)">
+                <button class="btn" onclick="sendGif()">🎬 GIF</button>
+            </div>
+        </div>
+    </div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, doc, setDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyCUOaafijAqzEofCgiJHwhscYCg997dlQI",
+        authDomain: "pcgram-65fca.firebaseapp.com",
+        projectId: "pcgram-65fca",
+        storageBucket: "pcgram-65fca.appspot.com",
+        messagingSenderId: "625488249988",
+        appId: "1:625488249988:web:8a9ab961b92d8a80e7aed1"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let monId = localStorage.getItem('pcgram_user');
+    let targetId = null;
+    let unsubMessages = null;
+
+    // --- INITIALISATION ---
+    async function init() {
+        if (!monId) {
+            let user = prompt("Choisis ton ID unique :");
+            if (user) {
+                monId = user.trim().toLowerCase();
+                await setDoc(doc(db, "users", monId), { 
+                    avatar: "https://cdn-icons-png.flaticon.com/512/149/149071.png" 
+                });
+                localStorage.setItem('pcgram_user', monId);
+            } else return init();
+        }
+        
+        // Charger mon profil
+        const snap = await getDoc(doc(db, "users", monId));
+        if(snap.exists()) document.getElementById('my-avatar').src = snap.data().avatar;
+
+        // Notifications
+        if ("Notification" in window) Notification.requestPermission();
+
+        renderContacts();
+    }
+
+    // --- PROFIL & MÉDIA ---
+    window.updateProfilePic = (el) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const base64 = e.target.result;
+            await updateDoc(doc(db, "users", monId), { avatar: base64 });
+            document.getElementById('my-avatar').src = base64;
+        };
+        reader.readAsDataURL(el.files[0]);
+    };
+
+    window.sendMedia = (el) => {
+        const file = el.files[0];
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const type = file.type.startsWith('image') ? 'img' : 'video';
+            await addDoc(collection(db, "messages"), {
+                sender: monId, receiver: targetId, media: e.target.result, type: type, timestamp: Date.now()
+            });
+        };
+        reader.readAsDataURL(file);
+    };
+
+    window.sendGif = async () => {
+        const q = prompt("Rechercher un GIF :");
+        if(!q) return;
+        // Démo simplifiée avec un lien statique (pourrait être lié à l'API Giphy)
+        const gifUrl = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJpYnpsZ3B6Z3B6Z3B6Z3B6/3o7TKMGpxx66Nx0E1y/giphy.gif";
+        await addDoc(collection(db, "messages"), {
+            sender: monId, receiver: targetId, media: gifUrl, type: 'img', timestamp: Date.now()
+        });
+    };
+
+    // --- LOGIQUE CHAT ---
+    window.sendMessage = async () => {
+        const inp = document.getElementById('msgInput');
+        if (!inp.value.trim()) return;
+        await addDoc(collection(db, "messages"), {
+            sender: monId, receiver: targetId, text: inp.value, timestamp: Date.now()
+        });
+        inp.value = "";
+    };
+
+    // --- CONFIGURATION DU MANIFEST PWA ---
+const manifest = {
+    "name": "PCgram",
+    "short_name": "PCgram",
+    "description": "Messagerie instantanée mobile crée pas KikoFox16",
+    "start_url": window.location.href,
+    "display": "standalone",
+    "background_color": "#e7ebf0",
+    "theme_color": "#0088cc",
+    "icons": [
+        {
+            "src": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQXPOUf7LgaD4aoxl8tr2yFMBGrydnnaeoNB2QyVYbVxg&s=10", 
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQXPOUf7LgaD4aoxl8tr2yFMBGrydnnaeoNB2QyVYbVxg&s=10",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+};
+
+// Injection du manifest dans la page
+const stringManifest = JSON.stringify(manifest);
+const blob = new Blob([stringManifest], {type: 'application/json'});
+const manifestURL = URL.createObjectURL(blob);
+const link = document.createElement('link');
+link.rel = 'manifest';
+link.href = manifestURL;
+document.head.appendChild(link);
+
+    
+    function listenMessages() {
+        if (unsubMessages) unsubMessages();
+        const q = query(collection(db, "messages"), orderBy("timestamp", "asc"));
+        unsubMessages = onSnapshot(q, (snapshot) => {
+            const box = document.getElementById('messages');
+            box.innerHTML = "";
+            snapshot.forEach(docSnap => {
+                const d = docSnap.data();
+                if ((d.sender === monId && d.receiver === targetId) || (d.sender === targetId && d.receiver === monId)) {
+                    const div = document.createElement('div');
+                    div.className = `msg ${d.sender === monId ? 'sent' : 'received'}`;
+                    if (d.text) div.innerText = d.text;
+                    if (d.media) {
+                        const m = document.createElement(d.type === 'img' ? 'img' : 'video');
+                        m.src = d.media;
+                        if(d.type === 'video') m.controls = true;
+                        div.appendChild(m);
+                    }
+                    box.appendChild(div);
+                }
+                // Notification simple
+                if (d.receiver === monId && d.timestamp > Date.now() - 2000) {
+                    if (Notification.permission === "granted") new Notification("PCgram: " + d.sender);
+                }
+            });
+            box.scrollTop = box.scrollHeight;
+        });
+    }
+
+    // --- CONTACTS & NAVIGATION ---
+    window.addNewContact = async () => {
+        const id = prompt("ID du contact :");
+        if (!id) return;
+        const cleanId = id.trim().toLowerCase();
+        const snap = await getDoc(doc(db, "users", cleanId));
+        if (snap.exists()) {
+            let contacts = JSON.parse(localStorage.getItem('contacts') || '[]');
+            if (!contacts.includes(cleanId)) {
+                contacts.push(cleanId);
+                localStorage.setItem('contacts', JSON.stringify(contacts));
+                renderContacts();
+            }
+        } else alert("Utilisateur inconnu");
+    };
+
+    window.renderContacts = async () => {
+        const list = document.getElementById('contact-list');
+        const contacts = JSON.parse(localStorage.getItem('contacts') || '[]');
+        list.innerHTML = contacts.length === 0 ? "<div style='padding:20px;text-align:center;'>Ajoute un contact pour commencer</div>" : "";
+        for (const id of contacts) {
+            const snap = await getDoc(doc(db, "users", id));
+            const data = snap.data();
+            const div = document.createElement('div');
+            div.className = 'contact-item';
+            div.innerHTML = `<img src="${data.avatar}" class="avatar"><div class="contact-info">${id}</div>`;
+            div.onclick = () => {
+                targetId = id;
+                document.getElementById('view-list').classList.add('hidden');
+                document.getElementById('view-chat').classList.remove('hidden');
+                document.getElementById('chat-title').innerText = id;
+                document.getElementById('chat-avatar').src = data.avatar;
+                listenMessages();
+            };
+            list.appendChild(div);
+        }
+    };
+
+    window.backToList = () => {
+        document.getElementById('view-chat').classList.add('hidden');
+        document.getElementById('view-list').classList.remove('hidden');
+    };
+
+    init();
+</script>
+</body>
+</html>
