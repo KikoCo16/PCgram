@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCgram - PWA</title>
+    <style>
+        :root { --tg-blue: #0088cc; --tg-bg: #e7ebf0; }
+        body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; background: var(--tg-bg); }
+        
+        /* Sidebar */
+        #sidebar { width: 320px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        .header { background: var(--tg-blue); color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; }
+        .contact-list { flex: 1; overflow-y: auto; }
+        .contact-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; transition: 0.2s; }
+        .contact-item:hover { background: #f4f4f5; }
+        .active { background: #e3f2fd !important; }
+
+        /* Chat */
+        #chat-window { flex: 1; display: none; flex-direction: column; }
+        #messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        
+        /* Bubbles */
+        .msg { max-width: 70%; padding: 10px; border-radius: 12px; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,0.1); }
+        .sent { align-self: flex-end; background: #effdde; }
+        .received { align-self: flex-start; background: white; }
+
+        /* Input */
+        #input-area { padding: 10px; background: white; display: flex; gap: 10px; border-top: 1px solid #ddd; }
+        input { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; outline: none; }
+        
+        button.add-btn { background: white; color: var(--tg-blue); border: 1px solid white; cursor: pointer; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div class="header">
+        PCgram 
+        <button class="add-btn" onclick="addNewContact()">+ Nouveau</button>
+    </div>
+    <div id="my-id-display" style="padding: 10px; font-size: 12px; background: #f9f9f9; border-bottom: 1px solid #eee;"></div>
+    <div id="contact-list" class="contact-list"></div>
+</div>
+
+<div id="chat-window">
+    <div id="chat-header" style="padding: 15px; background: white; border-bottom: 1px solid #eee; font-weight: bold;"></div>
+    <div id="messages"></div>
+    <div id="input-area">
+        <input type="text" id="msgInput" placeholder="Message...">
+        <button onclick="sendMessage()" style="background:none; border:none; color:var(--tg-blue); font-weight:bold; cursor:pointer;">ENVOYER</button>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // --- MANIFEST & PWA ---
+    const manifest = {
+        "name": "PCgram",
+        "short_name": "PCgram",
+        "start_url": window.location.href,
+        "display": "standalone",
+        "background_color": "#000000",
+        "theme_color": "#1db954",
+        "icons": [{
+            "src": "https://play-lh.googleusercontent.com/ZU9cSsyIJZo6Oy7HTHiEPwZg0m2Crep-d5ZrfajqtsH-qgUXSqKpNA2FpPDTn-7qA5Q",
+            "sizes": "192x192",
+            "type": "image/png"
+        }]
+    };
+    const stringManifest = JSON.stringify(manifest);
+    const blob = new Blob([stringManifest], {type: 'application/json'});
+    const manifestURL = URL.createObjectURL(blob);
+    document.querySelector('head').insertAdjacentHTML('beforeend', `<link rel="manifest" href="${manifestURL}">`);
+
+    // --- FIREBASE CONFIG ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyCUOaafijAqzEofCgiJHwhscYCg997dlQI",
+        authDomain: "pcgram-65fca.firebaseapp.com",
+        projectId: "pcgram-65fca",
+        storageBucket: "pcgram-65fca.firebasestorage.app",
+        messagingSenderId: "625488249988",
+        appId: "1:625488249988:web:8a9ab961b92d8a80e7aed1"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // --- LOGIQUE APP ---
+    let monId = localStorage.getItem('pcgram_user');
+    let targetId = null;
+    let unsubMessages = null;
+
+    async function initSession() {
+        if (!monId) {
+            monId = prompt("Créez votre identifiant unique :");
+            if (monId) {
+                await setDoc(doc(db, "users", monId), { created: Date.now() });
+                localStorage.setItem('pcgram_user', monId);
+            }
+        }
+        document.getElementById('my-id-display').innerText = "Mon ID : " + monId;
+        renderContacts();
+    }
+
+    window.addNewContact = async () => {
+        const id = prompt("Entrez l'ID de la personne à ajouter :");
+        if (!id || id === monId) return;
+        
+        const userDoc = await getDoc(doc(db, "users", id));
+        if (userDoc.exists()) {
+            let contacts = JSON.parse(localStorage.getItem('contacts') || '[]');
+            if (!contacts.includes(id)) contacts.push(id);
+            localStorage.setItem('contacts', JSON.stringify(contacts));
+            renderContacts();
+        } else {
+            alert("Cet utilisateur n'existe pas !");
+        }
+    };
+
+    function renderContacts() {
+        const list = document.getElementById('contact-list');
+        list.innerHTML = "";
+        const contacts = JSON.parse(localStorage.getItem('contacts') || '[]');
+        contacts.forEach(id => {
+            const div = document.createElement('div');
+            div.className = `contact-item ${id === targetId ? 'active' : ''}`;
+            div.innerHTML = `<b>${id}</b><br><small>Cliquer pour discuter</small>`;
+            div.onclick = () => startChat(id);
+            list.appendChild(div);
+        });
+    }
+
+    function startChat(id) {
+        targetId = id;
+        document.getElementById('chat-window').style.display = 'flex';
+        document.getElementById('chat-header').innerText = "Chat avec " + id;
+        renderContacts();
+        listenMessages();
+    }
+
+    function listenMessages() {
+        if (unsubMessages) unsubMessages();
+        const q = query(collection(db, "messages"), orderBy("timestamp", "asc"));
+        unsubMessages = onSnapshot(q, (snapshot) => {
+            const box = document.getElementById('messages');
+            box.innerHTML = "";
+            snapshot.forEach(doc => {
+                const d = doc.data();
+                if ((d.sender === monId && d.receiver === targetId) || (d.sender === targetId && d.receiver === monId)) {
+                    const div = document.createElement('div');
+                    div.className = `msg ${d.sender === monId ? 'sent' : 'received'}`;
+                    div.textContent = d.content;
+                    box.appendChild(div);
+                }
+            });
+            box.scrollTop = box.scrollHeight;
+        });
+    }
+
+    window.sendMessage = async () => {
+        const inp = document.getElementById('msgInput');
+        if (!inp.value || !targetId) return;
+        await addDoc(collection(db, "messages"), {
+            sender: monId,
+            receiver: targetId,
+            content: inp.value,
+            timestamp: Date.now()
+        });
+        inp.value = "";
+    };
+
+    initSession();
+</script>
+</body>
+</html>
