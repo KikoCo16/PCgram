@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCgram - Messagerie Cloud</title>
+    <style>
+        :root { 
+            --tg-blue: #0088cc; 
+            --tg-bg: #e7ebf0; 
+            --tg-sent: #effdde;
+        }
+        
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; height: 100vh; overflow: hidden; background: var(--tg-bg); }
+        
+        /* Sidebar */
+        #sidebar { width: 320px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        .header { background: var(--tg-blue); color: white; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        
+        .contact-list { flex: 1; overflow-y: auto; }
+        .contact-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; transition: 0.2s; }
+        .contact-item:hover { background: #f4f4f5; }
+        .active { background: #e3f2fd !important; border-left: 4px solid var(--tg-blue); }
+
+        /* Fenêtre de Chat */
+        #chat-window { flex: 1; display: none; flex-direction: column; background: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); background-repeat: repeat; }
+        #chat-header { padding: 15px; background: white; border-bottom: 1px solid #ddd; font-weight: bold; }
+        #messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+        
+        /* Bulles de message */
+        .msg { max-width: 75%; padding: 8px 12px; border-radius: 12px; font-size: 14.5px; box-shadow: 0 1px 1px rgba(0,0,0,0.1); line-height: 1.4; }
+        .sent { align-self: flex-end; background: var(--tg-sent); border-bottom-right-radius: 2px; }
+        .received { align-self: flex-start; background: white; border-bottom-left-radius: 2px; }
+
+        /* Saisie */
+        #input-area { padding: 12px; background: white; display: flex; gap: 10px; border-top: 1px solid #ddd; align-items: center; }
+        input { flex: 1; padding: 12px; border-radius: 25px; border: 1px solid #ccc; outline: none; font-size: 15px; }
+        
+        .add-btn { background: rgba(255,255,255,0.2); color: white; border: none; cursor: pointer; border-radius: 50%; width: 30px; height: 30px; font-size: 20px; font-weight: bold; }
+        .send-btn { background: none; border: none; color: var(--tg-blue); font-weight: bold; cursor: pointer; font-size: 16px; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div class="header">
+        PCgram 
+        <button class="add-btn" onclick="addNewContact()">+</button>
+    </div>
+    <div id="my-id-display" style="padding: 12px; font-size: 13px; background: #f9f9f9; border-bottom: 1px solid #eee; color: #555;"></div>
+    <div id="contact-list" class="contact-list"></div>
+</div>
+
+<div id="chat-window">
+    <div id="chat-header">Sélectionnez un contact</div>
+    <div id="messages"></div>
+    <div id="input-area">
+        <input type="text" id="msgInput" placeholder="Message..." autocomplete="off">
+        <button class="send-btn" onclick="sendMessage()">ENVOYER</button>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // --- MANIFEST CONFIG (PWA) ---
+    const manifest = {
+        "name": "PCgram Messenger",
+        "short_name": "PCgram",
+        "start_url": window.location.href,
+        "display": "standalone",
+        "background_color": "#e7ebf0",
+        "theme_color": "#0088cc",
+        "icons": [{
+            "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Telegram_logo.svg/512px-Telegram_logo.svg.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }]
+    };
+    const stringManifest = JSON.stringify(manifest);
+    const blob = new Blob([stringManifest], {type: 'application/json'});
+    const manifestURL = URL.createObjectURL(blob);
+    document.querySelector('head').insertAdjacentHTML('beforeend', `<link rel="manifest" href="${manifestURL}">`);
+
+    // --- FIREBASE SETUP ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyCUOaafijAqzEofCgiJHwhscYCg997dlQI",
+        authDomain: "pcgram-65fca.firebaseapp.com",
+        projectId: "pcgram-65fca",
+        storageBucket: "pcgram-65fca.firebasestorage.app",
+        messagingSenderId: "625488249988",
+        appId: "1:625488249988:web:8a9ab961b92d8a80e7aed1"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // --- LOGIQUE DE L'APPLICATION ---
+    let monId = localStorage.getItem('pcgram_user');
+    let targetId = null;
+    let unsubMessages = null;
+
+    async function initSession() {
+        if (!monId) {
+            monId = prompt("Créez votre identifiant unique pour PCgram :");
+            if (monId) {
+                monId = monId.trim().toLowerCase();
+                await setDoc(doc(db, "users", monId), { created: Date.now() });
+                localStorage.setItem('pcgram_user', monId);
+            }
+        }
+        if(monId) {
+            document.getElementById('my-id-display').innerText = "Mon ID : " + monId;
+            renderContacts();
+        }
+    }
+
+    window.addNewContact = async () => {
+        const id = prompt("Identifiant de la personne à ajouter :");
+        if (!id) return;
+        const cleanId = id.trim().toLowerCase();
+        if (cleanId === monId) {
+            alert("Vous ne pouvez pas vous ajouter vous-même.");
+            return;
+        }
+        
+        const userDoc = await getDoc(doc(db, "users", cleanId));
+        if (userDoc.exists()) {
+            let contacts = JSON.parse(localStorage.getItem('pc_contacts') || '[]');
+            if (!contacts.includes(cleanId)) contacts.push(cleanId);
+            localStorage.setItem('pc_contacts', JSON.stringify(contacts));
+            renderContacts();
+        } else {
+            alert("Cet utilisateur n'existe pas encore sur PCgram !");
+        }
+    };
+
+    function renderContacts() {
+        const list = document.getElementById('contact-list');
+        list.innerHTML = "";
+        const contacts = JSON.parse(localStorage.getItem('pc_contacts') || '[]');
+        contacts.forEach(id => {
+            const div = document.createElement('div');
+            div.className = `contact-item ${id === targetId ? 'active' : ''}`;
+            div.innerHTML = `<strong>${id}</strong><br><small style="color:#888">Cliquer pour discuter</small>`;
+            div.onclick = () => startChat(id);
+            list.appendChild(div);
+        });
+    }
+
+    function startChat(id) {
+        targetId = id;
+        document.getElementById('chat-window').style.display = 'flex';
+        document.getElementById('chat-header').innerText = "@" + id;
+        renderContacts();
+        listenMessages();
+    }
+
+    function listenMessages() {
+        if (unsubMessages) unsubMessages();
+        const q = query(collection(db, "messages"), orderBy("timestamp", "asc"));
+        unsubMessages = onSnapshot(q, (snapshot) => {
+            const box = document.getElementById('messages');
+            box.innerHTML = "";
+            snapshot.forEach(doc => {
+                const d = doc.data();
+                if ((d.sender === monId && d.receiver === targetId) || (d.sender === targetId && d.receiver === monId)) {
+                    const div = document.createElement('div');
+                    div.className = `msg ${d.sender === monId ? 'sent' : 'received'}`;
+                    div.textContent = d.content;
+                    box.appendChild(div);
+                }
+            });
+            box.scrollTop = box.scrollHeight;
+        });
+    }
+
+    window.sendMessage = async () => {
+        const inp = document.getElementById('msgInput');
+        if (!inp.value.trim() || !targetId) return;
+        try {
+            await addDoc(collection(db, "messages"), {
+                sender: monId,
+                receiver: targetId,
+                content: inp.value,
+                timestamp: Date.now()
+            });
+            inp.value = "";
+        } catch(e) {
+            console.error(e);
+        }
+    };
+
+    // Gérer la touche Entrée
+    document.getElementById('msgInput').addEventListener('keypress', (e) => {
+        if(e.key === 'Enter') sendMessage();
+    });
+
+    initSession();
+</script>
+</body>
+</html>
